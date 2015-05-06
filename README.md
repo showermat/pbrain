@@ -12,7 +12,11 @@ Pressing enter returns an ASCII newline (0x0A) to the program.
 
 ## Usage
 
-Execute the script in a file:
+Build the executable:
+
+    ./build.sh
+
+Execute the script stored in a file:
 
     pbrain test.bf
 
@@ -26,7 +30,7 @@ Start in interactive (console) mode:
 
 ### Flags
 
-  - `-g`: Display the ncurses UI
+  - `-g`: Display the curses UI
   - `-e`: When running a script from a file, switch to interactive mode after finishing rather than exiting immediately
   - `-p`: Disable interpretation of the pbrain commands `(`, `)`, and `:`, treating the deck as standard Brainfuck
   - `-d`: Disable the debugging extensions listed below
@@ -46,7 +50,7 @@ Interpreter commands begin with a slash and can only be typed by themselves on a
 
   - `/q`: Quit the interpreter
   - `/r`: Reset the machine state
-  - `/c`: Resume execution from the current cell (only meaningful )
+  - `/c`: Resume execution from the current cell (only meaningful if execution was halted with `!`)
 
 ## Bugs
 
