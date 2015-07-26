@@ -402,7 +402,7 @@ namespace curses
 					else if (d == 'A') histmove(-1);
 					else if (d == 'B') histmove(1);
 				}
-				else if (c == 127) io.backspace();
+				else if (c == 127 or c == 8) io.backspace();
 				else if (c == 1) io.home();
 				else if (c == 5) io.end();
 				else dest += c;
@@ -667,7 +667,7 @@ struct machine
 			case '-': t.dec(); break;
 			case '<': t.l(); break;
 			case '>': t.r(); break;
-			case ',': if (in != std::cin) t.in(in.get());
+			case ',': if (&in != &std::cin) t.in(in.get());
 				  else if (gui) { ionum = 2; t.in(inbox.in()); }
 				  else t.in(curses::readchar()); break;
 			case '.': if (gui) outbox.out(t.out());
