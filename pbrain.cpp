@@ -803,7 +803,7 @@ struct runner
 	int run(const std::string &deck)
 	{
 		m.load(clean(deck));
-		draw(1);
+		if (gui) draw(1);
 		return base_run();
 	}
 
