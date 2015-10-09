@@ -23,7 +23,7 @@ typedef uint8_t cell;
 typedef long index_t;
 
 bool gui = 0;
-unsigned int gui_sleep = 40000;
+unsigned int gui_sleep = 40 * 1000;
 int ionum = 0;
 
 namespace util
@@ -33,6 +33,14 @@ namespace util
 		std::stringstream ss{};
 		ss << t;
 		return ss.str();
+	}
+
+	template <typename T> T s2t(std::string s)
+	{
+		std::stringstream ss{s};
+		T t;
+		ss >> t;
+		return t;
 	}
 
 	std::vector<std::string> split(const std::string &s, const char delim)
@@ -171,7 +179,7 @@ namespace curses
 		out << "┘";
 	}
 	
-	int tape(int y, int x, int w, int size)
+	int tape(int y, int x, int w, int boxpos, int size)
 	{
 		int n = (w - 1) / (size + 1);
 		int diff = w - ((size + 1) * n + 1);
@@ -181,8 +189,8 @@ namespace curses
 		for (int i = 0; i < n; i++)
 		{
 			std::string tee, bar;
-			if (i == n / 2) { tee = "┲"; bar = "━"; }
-			else if (i == n / 2 + 1) { tee = "┱"; bar = "─"; }
+			if (i == boxpos) { tee = "┲"; bar = "━"; }
+			else if (i == boxpos + 1) { tee = "┱"; bar = "─"; }
 			else { tee = "┬"; bar = "─"; }
 			out << tee;
 			for (int j = 0; j < size; j++) out << bar;
@@ -194,10 +202,10 @@ namespace curses
 		for (int i = 0; i < n; i++)
 		{
 			std::string bar;
-			if (i == n / 2 || i == n / 2 + 1) bar = "┃";
+			if (i == boxpos || i == boxpos + 1) bar = "┃";
 			else bar = "│";
 			out << bar;
-			for (int j = 0; j < size; j++) out << " ";
+			out << "\033[" << size << "C";
 		}
 		out << "│";
 		for (int i = 0; i < rdiff; i++) out << " ";
@@ -206,8 +214,8 @@ namespace curses
 		for (int i = 0; i < n; i++)
 		{
 			std::string tee, bar;
-			if (i == n / 2) { tee = "┺"; bar = "━"; }
-			else if (i == n / 2 + 1) { tee = "┹"; bar = "─"; }
+			if (i == boxpos) { tee = "┺"; bar = "━"; }
+			else if (i == boxpos + 1) { tee = "┹"; bar = "─"; }
 			else { tee = "┴"; bar = "─"; }
 			out << tee;
 			for (int j = 0; j < size; j++) out << bar;
@@ -416,10 +424,11 @@ namespace curses
 
 struct tape
 {
-	index_t p;
+	index_t p, offset;
+	bool numchange;
 	std::vector<cell> pos, neg;
 
-	tape() : p{0}, pos{0}, neg{0} { }
+	tape() : p{0}, offset{-1}, numchange{true}, pos{0}, neg{0} { }
 
 	cell *resolve(index_t idx)
 	{
@@ -429,19 +438,32 @@ struct tape
 		return &(*arr)[idx];
 	}
 
-	void draw(int y, int x, int w, bool redraw = 1)
+	void draw(int y, int x, int w, bool redraw = true)
 	{
 		static int ldiff = -1;
+		static index_t old_p = -1, old_offset = 0;
 		std::ostream &out = std::cout;
 		int n = (w - 1) / 6;
-		if (redraw || ldiff < 0) ldiff = curses::tape(y, x, w, 5);
-		for (int i = 0; i < n; i++)
+		if (offset < 0) offset = n / 2;
+		else if (offset < 2) offset = 2;
+		else if (offset >= n - 2) offset = n - 3;
+		bool rdr_tape = false, rdr_num = false;
+		if (numchange) rdr_num = true;
+		numchange = false;
+		if (redraw) rdr_tape = rdr_num = true;
+		else if (p - old_p == offset - old_offset) rdr_tape = true;
+		else if (offset == old_offset) rdr_num = true;
+		else rdr_tape = rdr_num = true;
+		if (rdr_tape) ldiff = curses::tape(y, x, w, offset, 5);
+		if (rdr_num) for (int i = 0; i < n; i++)
 		{
-			cell val = *resolve(p - n / 2 + i);
+			cell val = *resolve(p - offset + i);
 			curses::move(y + 1, x + 2 + ldiff + i * 6);
 			if (val < 100) out << ' ';
 			out << (int) val << ' ';
 		}
+		old_p = p;
+		old_offset = offset;
 	}
 
 	void reset()
@@ -463,13 +485,13 @@ struct tape
 
 	void in(char val) { *resolve(p) = val; } // ,
 
-	void l() { p--; } // <
+	void l() { p--; offset--; } // <
 
-	void r() { p++; } // >
+	void r() { p++; offset++; } // >
 
-	void dec() { (*resolve(p))--; } // -
+	void dec() { (*resolve(p))--; numchange = true; } // -
 
-	void inc() { (*resolve(p))++; } // +
+	void inc() { (*resolve(p))++; numchange = true; } // +
 };
 
 struct ptable
@@ -498,10 +520,13 @@ struct ptable
 
 	std::stack<stackp> callstack;
 	std::map<cell, pinfo> table;
+	bool dirty = true;
 	int cur = -1;
 	
-	void draw(int y, int x, int h, int w, bool redraw = 1)
+	void draw(int y, int x, int h, int w, bool redraw = true)
 	{
+		if (! redraw && ! dirty) return;
+		dirty = false;
 		int rowh = 1;
 		int nrows = h / (rowh + 1);
 		std::ostream &out = std::cout;
@@ -537,6 +562,7 @@ struct ptable
 
 	void add(cell id, std::size_t addr, const std::string &content)
 	{
+		dirty = true;
 		table[id] = pinfo{addr, content};
 	}
 
@@ -560,6 +586,7 @@ struct ptable
 
 	void reset()
 	{
+		dirty = true;
 		table.clear();
 		while (! callstack.empty()) callstack.pop();
 	}
@@ -570,32 +597,36 @@ struct machine
 	std::string deck;
 	tape t;
 	ptable pt;
-	std::size_t p;
+	std::size_t p, offset;
 	unsigned long cnt;
 	std::istream &in;
 	std::ostream &out = std::cout;
 	curses::iobox inbox, outbox;
 
-	machine(std::istream &i) : deck{}, t{}, pt{}, p{0}, cnt{0}, in{i}, inbox{}, outbox{} { }
+	machine(std::istream &i) : deck{}, t{}, pt{}, p{0}, offset{0}, cnt{0}, in{i}, inbox{}, outbox{} { }
 
-	void drawdeck(int y, int x, int w, bool redraw = 1)
+	void drawdeck(int y, int x, int w, bool redraw = true)
 	{
-		static size_t last_pos = 1;
 		static int ldiff = -1;
-		if (p == last_pos && ! redraw && ldiff > 0) return;
-		last_pos = p;
+		static std::size_t old_p = 0, old_offset = 0;
+		offset += p - old_p;
 		int n = (w - 3) / 4;
-		if (redraw || ldiff < 0) ldiff = curses::tape(y, x, w, 3);
-		for (int i = 0; i < n; i++)
+		if (offset == 0) offset = n / 2;
+		else if (offset < 2) offset = 2;
+		else if (offset >= n - 2) offset = n - 3;
+		if (offset != old_offset || redraw) ldiff = curses::tape(y, x, w, offset, 3);
+		if (old_p != p || redraw) for (int i = 0; i < n; i++)
 		{
-			int idx = ((int) p) - n / 2 + i;
+			int idx = ((int) p) - offset + i;
 			char cmd = (idx < 0 || idx >= deck.size()) ? ' ' : deck[idx];
 			curses::move(y + 1, x + 2 + ldiff + i * 4);
 			out << cmd;
 		}
+		old_p = p;
+		old_offset = offset;
 	}
 
-	void drawstat(int y, int x, int h, int w, bool redraw = 0)
+	void drawstat(int y, int x, int h, int w, bool redraw = false)
 	{
 		const int keyw = 26, valw = 8;
 		static const std::vector<std::string> names{"Instructions executed", "Deck size", "Instruction pointer", "Tape position", "Procedures defined", "Current procedure"};
@@ -732,7 +763,7 @@ struct runner
 		return ret;
 	}
 
-	void draw(bool redraw = 0)
+	void draw(bool redraw = false)
 	{
 		int minh = 46, minw = 78;
 		std::pair<int, int> tsize = curses::termsize();
@@ -860,12 +891,13 @@ int main(int argc, char **argv) try
 {
 	bool exitflag = 1, pbflag = 1, extflag = 1;
 	int opt;
-	while ((opt = getopt(argc, argv, "degp")) > 0)
+	while ((opt = getopt(argc, argv, "degps:")) > 0)
 	{
 		if (opt == 'g') gui = 1;
 		else if (opt == 'e') exitflag = 0;
 		else if (opt == 'd') extflag = 0;
 		else if (opt == 'p') pbflag = 0;
+		else if (opt == 's') gui_sleep = 1000 * util::s2t<unsigned int>(std::string{optarg});
 		else return 1;
 	}
 	signal(2, sig);

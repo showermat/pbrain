@@ -34,6 +34,7 @@ Start in interactive (console) mode:
   - `-e`: When running a script from a file, switch to interactive mode after finishing rather than exiting immediately
   - `-p`: Disable interpretation of the pbrain commands `(`, `)`, and `:`, treating the deck as standard Brainfuck
   - `-d`: Disable the debugging extensions listed below
+  - `-s S`: In UI mode, sleep for `S` milliseconds between instructions.  Defaults to 10
 
 ### Debugging Extensions
 
@@ -55,5 +56,4 @@ Interpreter commands begin with a slash and can only be typed by themselves on a
 ## Bugs
 
   - Special characters such as newlines are not echoed by the input/output boxes.  They are stored and processed but do not appear on the screen.
-  - The whole thing needs a lot more testing.
 
