@@ -16,7 +16,7 @@
 #include <termios.h>
 #include <signal.h>
 #include <sys/ioctl.h>
-#include <readline/readline.h>
+#include <readline/readline.h> // TODO Remove
 #include <readline/history.h>
 
 typedef uint8_t cell;
@@ -227,11 +227,11 @@ namespace curses
 
 	struct iobox
 	{
-		int x, y, w, h, pos;
+		int x, y, w, h, pos, off;
 		std::string buf;
 		bool input;
 
-		iobox() : x{0}, y{0}, w{0}, h{0}, pos{0}, buf{}, input{1} { }
+		iobox() : x{0}, y{0}, w{0}, h{0}, pos{0}, off{0}, buf{}, input{1} { }
 
 		void setsize(int newy, int newx, int newh, int neww)
 		{
@@ -253,14 +253,16 @@ namespace curses
 		void putcursor(int i = -1)
 		{
 			if (i < 0) i = pos;
-			curses::move(y + i / w, x + i % w);
+			i -= off;
+			if (w == 0) curses::move(y, x);
+			else curses::move(y + i / w, x + i % w);
 		}
 
 		void reset(std::string content = "")
 		{
 			buf = content;
 			redraw();
-			//pos = content.size();
+			pos = content.size();
 		}
 
 		void redraw()
@@ -268,33 +270,56 @@ namespace curses
 			//attr_on(7);
 			clear();
 			//attr_reset();
-			pos = 0;
-			for (const char c : buf)
+			for (int i = off; i < off + w * h; i++)
 			{
-				putcursor();
-				putc(c, stdout);
-				pos++;
+				putcursor(i);
+				if (i >= buf.size()) return;
+				putc(buf[i], stdout);
 			}
+		}
+
+		void redraw_right()
+		{
+			for (int i = (pos == off ? pos : pos - 1); i < off + w * h; i++)
+			{
+				putcursor(i);
+				if (i >= buf.size())
+				{
+					putc(' ', stdout);
+					return;
+				}
+				putc(buf[i], stdout);
+			}
+		}
+
+		void adjoff()
+		{
+			if (pos < off)
+			{
+				off = (pos / w) * w;
+				redraw();
+			}
+			else if (pos >= off + w * h - 1)
+			{
+				off = (pos / w - h + 1) * w;
+				redraw();
+			}
+			else redraw_right();
 		}
 
 		void resize(int newy, int newx, int newh, int neww)
 		{
 			clear();
 			setsize(newy, newx, newh, neww);
+			adjoff();
 			redraw();
 		}
 
 		void addchar(char c)
 		{
 			if (c < 32 || c > 126) return;
-			buf.insert(pos, 1, c);
-			for (int i = pos; i < buf.size(); i++)
-			{
-				putcursor(i);
-				putc(buf[i], stdout);
-			}
-			pos++;
-			
+			buf.insert(pos++, 1, c);
+			adjoff();
 		}
 
 		char in()
@@ -314,30 +339,35 @@ namespace curses
 		void back()
 		{
 			if (pos > 0) pos--;
+			adjoff();
 		}
 
 		void forward()
 		{
 			if (pos < buf.size()) pos++;
+			adjoff();
 		}
 
 		void home()
 		{
 			pos = 0;
+			adjoff();
 		}
 
 		void end()
 		{
 			pos = buf.size();
+			off = pos - w * h;
+			if (off < 0) off = 0;
+			adjoff();
 		}
 
 		void backspace()
 		{
 			if (pos == 0) return;
-			buf.erase(pos - 1);
+			buf.erase(pos - 1, 1);
 			pos--;
-			putcursor();
-			putc(' ', stdout);
+			adjoff();
 		}
 	};
 
@@ -349,7 +379,7 @@ namespace curses
 		std::vector<std::string> history;
 		int histidx;
 
-		readline() : x{0}, y{0}, w{0}, h{0}, prompt{"> "}, io{} { }
+		readline() : x{0}, y{0}, w{0}, h{0}, prompt{"> "}, io{}, history{""}, histidx{0} { }
 
 		void redraw()
 		{
@@ -371,17 +401,26 @@ namespace curses
 		{
 			histidx += offset;
 			if (histidx < 0) histidx = 0;
-			else if (histidx > history.size()) histidx = history.size();
-			if (histidx == history.size()) io.reset();
-			else io.reset(history[histidx]);
+			else if (histidx >= history.size()) histidx = history.size() - 1;
+			io.reset(history[histidx]);
 		}
 
-		void histstore(std::string content)
+		void histset(const std::string &content, bool force = false)
 		{
-			if (content == "") goto histupd; // I'm a bad boy.
-			if (history.size() && content == history[history.size() - 1]) goto histupd;
-			history.push_back(content);
-			histupd: histidx = history.size();
+			if ((histidx == history.size() - 1 || force) && (history.size() < 2 || history[history.size() - 2] != content)) history.back() = content; // TODO Cleanup!  This sets the last line in history if we're currently on the last line or we're re-executing an older statement, but only if it's not a duplicate of the previous line.
+		}
+
+		void histcopy()
+		{
+			if (histidx == history.size() - 1) return;
+			history.back() = history[histidx];
+			histidx = history.size() - 1;
+		}
+
+		void histnew()
+		{
+			if (history.back() != "") history.push_back("");
+			histidx = history.size() - 1;
 		}
 
 		bool read(std::string &dest)
@@ -389,6 +428,7 @@ namespace curses
 			redraw();
 			io.reset();
 			io.redraw();
+			histidx = history.size() - 1;
 			while (1)
 			{
 				io.input = 1;
@@ -396,8 +436,9 @@ namespace curses
 				if (c == '\n')
 				{
 					dest = io.buf;
-					histstore(io.buf);
-					return 1;
+					histset(io.buf, true);
+					histnew();
+					return true;
 				}
 				else if (c == 4) return 0;
 				else if (c == 27)
@@ -407,15 +448,18 @@ namespace curses
 					char d = io.in();
 					if (d == 'C') io.forward();
 					else if (d == 'D') io.back();
-					else if (d == 'A') histmove(-1);
-					else if (d == 'B') histmove(1);
+					else if (d == 'A' || d == 'B')
+					{
+						histset(io.buf);
+						histmove(d == 'A' ? -1 : 1);
+					}
 				}
-				else if (c == 127 or c == 8) io.backspace();
+				else if (c == 127 or c == 8) { io.backspace(); histcopy(); }
 				else if (c == 1) io.home();
 				else if (c == 5) io.end();
-				else dest += c;
+				else { dest += c; histcopy(); }
 			}
-			return 0;
+			return false;
 		}
 
 		
@@ -600,17 +644,17 @@ struct machine
 	std::size_t p, offset;
 	unsigned long cnt;
 	std::istream &in;
-	std::ostream &out = std::cout;
+	std::ostream &out;
 	curses::iobox inbox, outbox;
 
-	machine(std::istream &i) : deck{}, t{}, pt{}, p{0}, offset{0}, cnt{0}, in{i}, inbox{}, outbox{} { }
+	machine(std::istream &i) : deck{}, t{}, pt{}, p{0}, offset{0}, cnt{0}, in{i}, out{std::cout}, inbox{}, outbox{} { }
 
 	void drawdeck(int y, int x, int w, bool redraw = true)
 	{
 		static int ldiff = -1;
 		static std::size_t old_p = 0, old_offset = 0;
 		offset += p - old_p;
-		int n = (w - 3) / 4;
+		int n = (w - 1) / 4;
 		if (offset == 0) offset = n / 2;
 		else if (offset < 2) offset = 2;
 		else if (offset >= n - 2) offset = n - 3;
