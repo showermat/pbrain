@@ -19,6 +19,9 @@
 #include <readline/readline.h> // TODO Remove
 #include <readline/history.h>
 
+// TODO
+// ^C should interrrupt the running program and place the user at a fresh prompt rather than exiting
+
 typedef uint8_t cell;
 typedef long index_t;
 
@@ -57,20 +60,18 @@ namespace curses
 {
 	std::ostream &out = std::cout;
 
-	struct termios ios_default, ios_cbreak, ios_raw;
+	struct termios ios_default, ios_raw;
 
 	void init()
 	{
-		tcgetattr(0, &ios_default);
-		ios_cbreak = ios_default;
-		ios_cbreak.c_lflag &= ~(ICANON | ECHO);
+		tcgetattr(STDOUT_FILENO, &ios_default);
 		ios_raw = ios_default;
-		cfmakeraw(&ios_raw);
+		ios_raw.c_lflag &= ~(ICANON | ECHO); // cbreak
 	}
 
-	void set_cbreak() { tcsetattr(0, TCSANOW, &ios_cbreak); }
+	void set_raw() { tcsetattr(STDOUT_FILENO, TCSANOW, &ios_raw); }
 
-	void clear_cbreak() { tcsetattr(0, TCSANOW, &ios_default); }
+	void set_cooked() { tcsetattr(STDOUT_FILENO, TCSANOW, &ios_default); }
 
 	void clear() { out << "\033[H\033[2J" << std::flush; }
 
@@ -78,22 +79,22 @@ namespace curses
 	{
 		out << "\033[?1049h\033[?25l";
 		clear();
-		set_cbreak();
+		set_raw();
 	}
 
 	void scr_restore()
 	{
 		out << "\033[?1049l\033[?25h" << std::flush;
-		clear_cbreak();
+		set_cooked();
 	}
 
 	char readchar()
 	{
 		if (gui) out << "\033[?25h" << std::flush;
-		else tcsetattr(0, TCSANOW, &ios_cbreak);
+		else set_raw();
 		char ret = getc(stdin);
 		if (gui) out << "\033[?25l" << std::flush;
-		else tcsetattr(0, TCSANOW, &ios_default);
+		else set_cooked();
 		return ret;
 	}
 
@@ -179,12 +180,43 @@ namespace curses
 		out << "┘";
 	}
 	
-	int tape(int y, int x, int w, int boxpos, int size)
+	int tape(int y, int x, int w, int boxpos, int size, int oldboxpos = -1)
 	{
 		int n = (w - 1) / (size + 1);
 		int diff = w - ((size + 1) * n + 1);
 		int ldiff = diff / 2, rdiff = diff - ldiff;
-		curses::move(y, x);
+		if (oldboxpos >= 0)
+		{
+			if (boxpos == oldboxpos) return ldiff;
+			int oldboxx = x + ldiff + (size + 1) * oldboxpos;
+			int newboxx = x + ldiff + (size + 1) * boxpos;
+			move(y, oldboxx);
+			out << "┬";
+			for (int j = 0; j < size; j++) out << "─";
+			out << "┬";
+			move(y + 1, oldboxx);
+			out << "│";
+			move(y + 1, oldboxx + size + 1);
+			out << "│";
+			move(y + 2, oldboxx);
+			out << "┴";
+			for (int j = 0; j < size; j++) out << "─";
+			out << "┴";
+			move(y, newboxx);
+			out << "┲";
+			for (int j = 0; j < size; j++) out << "━";
+			out << "┱";
+			move(y + 1, newboxx);
+			out << "┃";
+			move(y + 1, newboxx + size + 1);
+			out << "┃";
+			move(y + 2, newboxx);
+			out << "┺";
+			for (int j = 0; j < size; j++) out << "━";
+			out << "┹";
+			return ldiff;
+		}
+		move(y, x);
 		for (int i = 0; i < ldiff; i++) out << "─";
 		for (int i = 0; i < n; i++)
 		{
@@ -197,7 +229,7 @@ namespace curses
 		}
 		out << "┬";
 		for (int i = 0; i < rdiff; i++) out << "─";
-		curses::move(y + 1, x);
+		move(y + 1, x);
 		for (int i = 0; i < ldiff; i++) out << " ";
 		for (int i = 0; i < n; i++)
 		{
@@ -209,7 +241,7 @@ namespace curses
 		}
 		out << "│";
 		for (int i = 0; i < rdiff; i++) out << " ";
-		curses::move(y + 2, x);
+		move(y + 2, x);
 		for (int i = 0; i < ldiff; i++) out << "─";
 		for (int i = 0; i < n; i++)
 		{
@@ -245,7 +277,7 @@ namespace curses
 		{
 			for (int i = 0; i < h; i++)
 			{
-				curses::move(y + i, x);
+				move(y + i, x);
 				for (int j = 0; j < w; j++) putc(' ', stdout);
 			}
 		}
@@ -254,8 +286,8 @@ namespace curses
 		{
 			if (i < 0) i = pos;
 			i -= off;
-			if (w == 0) curses::move(y, x);
-			else curses::move(y + i / w, x + i % w);
+			if (w == 0) move(y, x);
+			else move(y + i / w, x + i % w);
 		}
 
 		void reset(std::string content = "")
@@ -495,10 +527,11 @@ struct tape
 		if (numchange) rdr_num = true;
 		numchange = false;
 		if (redraw) rdr_tape = rdr_num = true;
-		else if (p - old_p == offset - old_offset) rdr_tape = true;
+		//else if (p - old_p == offset - old_offset) rdr_tape = true;
 		else if (offset == old_offset) rdr_num = true;
-		else rdr_tape = rdr_num = true;
+		else rdr_num = true;
 		if (rdr_tape) ldiff = curses::tape(y, x, w, offset, 5);
+		else ldiff = curses::tape(y, x, w, offset, 5, old_offset);
 		if (rdr_num) for (int i = 0; i < n; i++)
 		{
 			cell val = *resolve(p - offset + i);
@@ -658,7 +691,8 @@ struct machine
 		if (offset == 0) offset = n / 2;
 		else if (offset < 2) offset = 2;
 		else if (offset >= n - 2) offset = n - 3;
-		if (offset != old_offset || redraw) ldiff = curses::tape(y, x, w, offset, 3);
+		if (redraw) ldiff = curses::tape(y, x, w, offset, 3);
+		else ldiff = curses::tape(y, x, w, offset, 3, old_offset);
 		if (old_p != p || redraw) for (int i = 0; i < n; i++)
 		{
 			int idx = ((int) p) - offset + i;
@@ -780,6 +814,13 @@ struct runner
 	int rdln_x, rdln_y, rdln_w, rdln_h;
 	std::ostream &out = std::cout;
 
+	const static int redraw_frames = 0x01;
+	const static int redraw_stats = 0x02;
+	const static int redraw_tape = 0x04;
+	const static int redraw_deck = 0x08;
+	const static int redraw_procs = 0x10;
+	const static int redraw_all = 0x1f;
+
 	runner(std::istream &in) : m{in}, read{}
 	{
 		m.inbox.setsize(30, 69, 7, 40);
@@ -807,7 +848,7 @@ struct runner
 		return ret;
 	}
 
-	void draw(bool redraw = false)
+	void draw(int redraw = 0)
 	{
 		int minh = 46, minw = 78;
 		std::pair<int, int> tsize = curses::termsize();
@@ -818,7 +859,7 @@ struct runner
 		int h_cons = rows - 32 - h_proc;
 		int w_proc = cols * 2 / 5 - 5;
 		if (w_proc < 48) w_proc = 48;
-		if (redraw)
+		if (redraw & redraw_frames)
 		{
 			curses::clear();
 			m.inbox.resize(30, w_proc + 10, h_proc / 2 - 4, cols - w_proc - 15);
@@ -850,10 +891,10 @@ struct runner
 			read.resize(h_proc + 32, 7, h_cons - 3, cols - 12);
 			read.redraw();
 		}
-		m.drawstat(5, 7, 4, cols - 12, redraw);
-		m.t.draw(14, 7, cols - 12, redraw);
-		m.drawdeck(22, 7, cols - 12, redraw);
-		m.pt.draw(30, 7, h_proc - 4, w_proc - 6, redraw);
+		if (redraw & redraw_stats) m.drawstat(5, 7, 4, cols - 12, redraw & redraw_frames);
+		if (redraw & redraw_tape) m.t.draw(14, 7, cols - 12, redraw & redraw_frames);
+		if (redraw & redraw_deck) m.drawdeck(22, 7, cols - 12, redraw & redraw_frames);
+		if (redraw & redraw_tape) m.pt.draw(30, 7, h_proc - 4, w_proc - 6, redraw & redraw_frames);
 		if (ionum == 1) read.io.putcursor();
 		else if (ionum == 2) m.inbox.putcursor();
 		out << std::flush;
@@ -866,7 +907,7 @@ struct runner
 		{
 			while (! m.step()) if (gui)
 			{
-				draw();
+				draw(runner::redraw_stats | runner::redraw_tape | runner::redraw_deck);
 				usleep(gui_sleep);
 			}
 		}
@@ -878,7 +919,7 @@ struct runner
 	int run(const std::string &deck)
 	{
 		m.load(clean(deck));
-		if (gui) draw(1);
+		if (gui) draw(runner::redraw_deck);
 		return base_run();
 	}
 
@@ -892,7 +933,7 @@ struct runner
 		std::string line{};
 		if (gui)
 		{
-			draw(1);
+			//draw(1); // TODO Is this necessary at all?
 			ionum = 1;
 			if (! read.read(line)) return 1;
 		}
@@ -918,16 +959,20 @@ struct runner
 
 runner *r = 0;
 
-void resize(int num)
+void resize(int num) // TODO Rate-limit calls to this
 {
-	if (r) r->draw(1);
+	if (r) r->draw(runner::redraw_all);
 }
 
 void sig(int num)
 {
 	if (r) delete r;
 	if (gui) curses::scr_restore();
-	else curses::clear_cbreak();
+	else
+	{
+		curses::set_cooked();
+		std::cout << "\n";
+	}
 	exit(1);
 }
 
@@ -974,17 +1019,17 @@ int main(int argc, char **argv) try
 	else r = new runner{std::cin};
 	r->exts = extflag;
 	r->pbrain = pbflag;
-	if (gui) r->draw(1);
+	if (gui) r->draw(runner::redraw_all);
 	if (deckflag) r->run(deck);
 	if (! deckflag || ! exitflag)  while(! r->prompt());
 	if (gui) curses::scr_restore();
+	else std::cout << "\n";
 	if (r) delete(r);
 	return 0;
 }
 catch (std::runtime_error e)
 {
-	curses::clear_cbreak();
+	curses::set_cooked();
 	std::cerr << e.what() << "\n";
 	return 1;
 }
-
